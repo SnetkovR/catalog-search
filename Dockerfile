@@ -32,6 +32,6 @@ RUN mkdir -p /app/data/catalog /app/var /app/.cache/huggingface
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=3).read()"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3).read()"]
 ENTRYPOINT ["catalog-search"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8000", "--index-interval", "60"]

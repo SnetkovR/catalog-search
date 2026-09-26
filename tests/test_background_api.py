@@ -65,6 +65,7 @@ def test_existing_catalog_stays_available_while_background_model_is_busy(tmp_pat
             assert status["ready"] is True
             assert status["count"] == 1
             assert status["indexing"]["state"] == "running"
+            assert client.get("/health/ready").status_code == 200
             item = client.get("/api/catalog").json()["items"][0]
             assert client.get(item["thumbnail_url"]).status_code == 200
             assert client.post(f"/api/search/catalog/{item['id']}").status_code == 200

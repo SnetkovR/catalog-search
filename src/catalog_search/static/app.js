@@ -70,10 +70,15 @@ async function loadCatalog(append = false, display = true) {
   catalogTotal = data.total; $("count").textContent = data.total;
   if (display && !showingResults) showCatalog();
 }
-function indexingStatus(job) {
+function indexingStatus(status) {
+  const job = status.indexing;
   const element = $("indexing-status");
   let text;
-  if (!job || !job.enabled) text = "Автообновление выключено. Каталог обновляется вручную.";
+  if (status.phase === "loading_model") text = "Загружаем модель поиска… Каталог станет доступен после подготовки.";
+  else if (status.phase === "model_error") text = "Не удалось загрузить модель. Проверьте журнал сервера и перезапустите сервис.";
+  else if (status.phase === "incompatible_index") text = "Индекс несовместим с моделью. Требуется перестроение каталога.";
+  else if (status.phase === "index_error") text = `Не удалось подготовить каталог: ${status.error || "см. журнал сервера"}`;
+  else if (!job || !job.enabled) text = "Автообновление выключено. Каталог обновляется вручную.";
   else if (job.state === "running") text = "Проверяем каталог и обрабатываем новые фотографии…";
   else if (job.state === "error") text = `Не удалось обновить каталог: ${job.error}. Повторим попытку автоматически.`;
   else if (job.state === "waiting") text = job.error ? "Каталог обновляется другим процессом. Проверим снова автоматически." : "Ожидаем проверки каталога…";
@@ -81,7 +86,7 @@ function indexingStatus(job) {
   else if (job.report?.deferred) text = `Ожидаем завершения записи файлов: ${job.report.deferred}.`;
   else text = `Каталог обновляется автоматически. Интервал проверки: ${job.interval_seconds} с.`;
   element.textContent = text;
-  element.classList.toggle("error", job?.state === "error" || Boolean(job?.report?.errors.length));
+  element.classList.toggle("error", ["model_error", "index_error", "incompatible_index"].includes(status.phase) || job?.state === "error" || Boolean(job?.report?.errors.length));
   element.title = (job?.report?.errors || []).slice(0, 5).map(item => `${item.path}: ${item.error}`).join("\n");
 }
 async function refreshStatus() {
@@ -90,7 +95,7 @@ async function refreshStatus() {
   try {
     const status = await api("/api/status");
     ready = status.ready;
-    indexingStatus(status.indexing);
+    indexingStatus(status);
     $("count").textContent = status.count;
     if (!busy && status.generation !== catalogGeneration) {
       // Refresh the collection without replacing an in-progress query or its results.

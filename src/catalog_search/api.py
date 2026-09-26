@@ -1,8 +1,11 @@
 """Single-process local API with bounded uploads and serialized CPU inference."""
 
+import asyncio
 import hashlib
 import json
+import logging
 import re
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -123,23 +126,47 @@ class SearchService:
 def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
     settings = settings or Settings()
 
+    def attach_encoder(app, instance):
+        shared = PriorityEncoder(instance)
+        app.state.service = SearchService(settings, shared)
+        app.state.indexing_job = IndexingJob(settings, shared)
+        app.state.indexing_job.start()
+        app.state.model_state = "ready"
+
+    async def initialize(app):
+        try:
+            from .encoder import DinoEncoder
+
+            instance = await run_in_threadpool(DinoEncoder, settings)
+            if not app.state.stopping:
+                attach_encoder(app, instance)
+        except Exception as exc:
+            app.state.model_state = "error"
+            app.state.startup_error = str(exc)
+            logging.getLogger(__name__).exception("Model initialization failed")
+
     @asynccontextmanager
     async def lifespan(app):
         settings.storage.mkdir(parents=True, exist_ok=True)
         with FileLock(str(settings.storage / "server.lock"), timeout=0):
-            instance = encoder
-            if instance is None:
-                from .encoder import DinoEncoder
-
-                instance = await run_in_threadpool(DinoEncoder, settings)
-            shared = PriorityEncoder(instance)
-            app.state.service = SearchService(settings, shared)
-            app.state.indexing_job = IndexingJob(settings, shared)
-            app.state.indexing_job.start()
+            app.state.service = None
+            app.state.indexing_job = None
+            app.state.model_state = "loading"
+            app.state.startup_error = None
+            app.state.stopping = False
+            task = None
+            if encoder is not None:
+                attach_encoder(app, encoder)
+            else:
+                task = asyncio.create_task(initialize(app))
             try:
                 yield
             finally:
-                await run_in_threadpool(app.state.indexing_job.stop)
+                app.state.stopping = True
+                if task is not None:
+                    await task
+                if app.state.indexing_job is not None:
+                    await run_in_threadpool(app.state.indexing_job.stop)
 
     app = FastAPI(title="Поиск фотографий", lifespan=lifespan)
     app.add_middleware(BodyLimitMiddleware)
@@ -154,16 +181,63 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
 
     @app.get("/api/status")
     def status():
-        state = catalog_status(settings)
-        compatible = state.get("signature") == app.state.service.encoder.signature
+        error = app.state.startup_error
+        try:
+            state = catalog_status(settings)
+        except (CatalogError, sqlite3.DatabaseError) as exc:
+            state = {"ready": False, "count": 0, "generation": None}
+            error = str(exc)
+        service = app.state.service
+        compatible = service is not None and state.get("signature") == service.encoder.signature
+        ready = state["ready"] and compatible and not app.state.stopping
+        job = app.state.indexing_job.snapshot() if app.state.indexing_job else None
+        if app.state.stopping:
+            phase = "stopping"
+        elif app.state.model_state == "loading":
+            phase = "loading_model"
+        elif app.state.model_state == "error":
+            phase = "model_error"
+        elif error:
+            phase = "index_error"
+        elif ready:
+            phase = "ready"
+        elif state.get("signature") and not compatible:
+            phase = "incompatible_index"
+        elif job and job["state"] == "running":
+            phase = "indexing"
+        elif job and job["state"] == "error":
+            phase = "index_error"
+            error = job["error"]
+        else:
+            phase = "empty_catalog"
         return {
             **state,
-            "ready": state["ready"] and compatible,
+            "ready": bool(ready),
             "compatible": compatible,
+            "phase": phase,
+            "model": app.state.model_state,
+            "error": error,
             "device": "cpu",
             "threads": settings.threads,
-            "indexing": app.state.indexing_job.snapshot(),
+            "indexing": job,
         }
+
+    @app.get("/health/live", include_in_schema=False)
+    def live():
+        return {"alive": True}
+
+    @app.get("/health/ready", include_in_schema=False)
+    def readiness():
+        state = status()
+        return JSONResponse(
+            {"ready": state["ready"], "phase": state["phase"]},
+            status_code=200 if state["ready"] else 503,
+        )
+
+    def search_service():
+        if app.state.service is None or app.state.stopping:
+            raise HTTPException(503, "Модель еще не готова к поиску", headers={"Retry-After": "3"})
+        return app.state.service
 
     @app.get("/api/catalog")
     def catalog(limit: int = Query(24, ge=1, le=100), offset: int = Query(0, ge=0)):
@@ -230,12 +304,12 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
             except (ValueError, TypeError) as exc:
                 raise HTTPException(422, "Некорректная область поиска") from exc
         return await run_in_threadpool(
-            app.state.service.search, data, selected_crop, top_k, exclude_identical
+            search_service().search, data, selected_crop, top_k, exclude_identical
         )
 
     @app.post("/api/search/catalog/{image_id}")
     def neighbors(image_id: str, top_k: int = Query(10, ge=1, le=100)):
-        return app.state.service.neighbors(image_id, top_k)
+        return search_service().neighbors(image_id, top_k)
 
     static = Path(__file__).parent / "static"
     if static.is_dir():
