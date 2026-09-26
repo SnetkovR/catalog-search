@@ -61,6 +61,34 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  docker:
+    name: Docker build and smoke tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build production CPU image
+        run: docker build --tag catalog-search:ci .
+
+      - name: Verify startup, health, static assets, search and background indexing
+        run: python3 tests/docker_smoke.py catalog-search:ci
+
+      - name: Upload container logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-logs
+          path: var/ci/docker/
+          if-no-files-found: ignore
+          retention-days: 7
+
   browser:
     name: Browser tests (Chromium)
     runs-on: ubuntu-24.04
