@@ -19,8 +19,9 @@ from .config import MAX_IMAGE_BYTES, Settings
 from .images import Crop, ImageError, decode_image
 
 
-class PayloadTooLarge(Exception):
-    pass
+class PayloadTooLarge(HTTPException):
+    def __init__(self):
+        super().__init__(413, "Файл больше 20 МБ")
 
 
 class BodyLimitMiddleware:

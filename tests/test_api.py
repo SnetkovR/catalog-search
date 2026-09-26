@@ -93,3 +93,25 @@ def test_empty_catalog(tmp_path):
         assert client.get("/api/status").json()["ready"] is False
         assert client.get("/api/catalog").json()["items"] == []
         assert client.post("/api/search", files={"file": ("a.png", b"x")}).status_code == 409
+
+
+def test_oversized_body_and_chunked_upload_are_rejected(web, monkeypatch):
+    import catalog_search.api as api
+
+    monkeypatch.setattr(api, "MAX_IMAGE_BYTES", 1024)
+    client, _, _, _ = web
+    assert client.post("/api/search", files={"file": ("big.jpg", b"x" * 2048)}).status_code == 413
+    chunks = iter(
+        [
+            b'--boundary\r\nContent-Disposition: form-data; name="file"; '
+            b'filename="big.jpg"\r\n\r\n',
+            b"x" * 70_000,
+            b"\r\n--boundary--\r\n",
+        ]
+    )
+    response = client.post(
+        "/api/search",
+        content=chunks,
+        headers={"Content-Type": "multipart/form-data; boundary=boundary"},
+    )
+    assert response.status_code == 413
