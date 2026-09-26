@@ -2,8 +2,16 @@
 .bootstrap/
 .python/
 .cache/
-data/
-var/
+# Keep the data directories, but never their contents.
+/data/*
+!/data/catalog/
+/data/catalog/*
+!/data/catalog/.gitkeep
+/var/*
+!/var/.gitkeep
+!/var/screenshots/
+/var/screenshots/*
+!/var/screenshots/.gitkeep
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -11,4 +19,3 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 .env
-
