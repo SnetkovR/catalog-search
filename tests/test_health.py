@@ -8,6 +8,7 @@ from test_jobs import wait_for
 from catalog_search.api import create_app
 from catalog_search.catalog import index_catalog
 from catalog_search.config import Settings
+from catalog_search.storage import connect
 
 
 def test_http_available_during_model_loading_then_ready(tmp_path, monkeypatch):
@@ -67,6 +68,13 @@ def test_readiness_handles_empty_incompatible_and_corrupt_index(tmp_path):
         assert client.get("/health/ready").json()["phase"] == "incompatible_index"
         index_catalog(settings, ColorEncoder(), rebuild=True)
         assert client.get("/health/ready").status_code == 200
+        connection = connect(settings.database)
+        try:
+            connection.execute("UPDATE metadata SET value='/other/catalog' WHERE key='root'")
+            connection.commit()
+        finally:
+            connection.close()
+        assert client.get("/health/ready").json()["phase"] == "incompatible_index"
         settings.database.write_bytes(b"corrupt database")
         assert client.get("/health/live").status_code == 200
         assert client.get("/health/ready").json()["phase"] == "index_error"

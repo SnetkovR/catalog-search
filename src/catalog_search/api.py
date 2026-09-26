@@ -188,7 +188,11 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
             state = {"ready": False, "count": 0, "generation": None}
             error = str(exc)
         service = app.state.service
-        compatible = service is not None and state.get("signature") == service.encoder.signature
+        compatible = (
+            service is not None
+            and state.get("signature") == service.encoder.signature
+            and state.get("root") == str(settings.catalog.resolve())
+        )
         ready = state["ready"] and compatible and not app.state.stopping
         job = app.state.indexing_job.snapshot() if app.state.indexing_job else None
         if app.state.stopping:

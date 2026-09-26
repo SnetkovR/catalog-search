@@ -62,6 +62,7 @@ def catalog_status(settings: Settings) -> dict:
             "count": count,
             "generation": info.get("generation"),
             "signature": info.get("signature"),
+            "root": info.get("root"),
             "updated_at": info.get("updated_at"),
         }
     finally:
@@ -311,6 +312,8 @@ class SearchIndex:
             info = metadata(connection)
             if info.get("signature") != signature:
                 raise CatalogError("Индекс несовместим с моделью. Выполните index --rebuild")
+            if info.get("root") != str(settings.catalog.resolve()):
+                raise CatalogError("Индекс относится к другой папке. Выполните index --rebuild")
             self.generation = info["generation"]
             self.dimension = int(info["dimension"])
             records = connection.execute(
