@@ -120,7 +120,9 @@ function showResults(data) {
   $("results-title").textContent = "Похожие фотографии";
   $("show-catalog").hidden = false; $("load-more").hidden = true;
   render(data.results, true);
-  message(`${data.results.length} результатов · ${(data.elapsed_ms / 1000).toFixed(2)} с · Сходство не является вероятностью совпадения.`);
+  const plural = new Intl.PluralRules("ru").select(data.results.length);
+  const noun = {one: "результат", few: "результата", many: "результатов", other: "результата"}[plural];
+  message(`${data.results.length} ${noun} · ${(data.elapsed_ms / 1000).toFixed(2)} с · Сходство не является вероятностью совпадения.`);
 }
 async function search() {
   if (busy || !ready || (!selectedFile && !selectedCatalog)) return;
