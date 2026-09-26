@@ -103,3 +103,16 @@ def test_missing_catalog_does_not_erase_existing_index(catalog):
     with pytest.raises(CatalogError, match="не найдена"):
         index_catalog(missing, encoder)
     assert catalog_status(settings)["count"] == 2
+
+
+def test_empty_scan_preserves_generation_and_publication_time(catalog):
+    settings, encoder = catalog
+    for path in settings.catalog.iterdir():
+        path.unlink()
+    index_catalog(settings, encoder)
+    initial = catalog_status(settings)
+    index_catalog(settings, encoder)
+    assert catalog_status(settings) == initial
+    Image.new("RGB", (20, 40), "red").save(settings.catalog / "new.png")
+    index_catalog(settings, encoder)
+    assert catalog_status(settings)["generation"] != initial["generation"]

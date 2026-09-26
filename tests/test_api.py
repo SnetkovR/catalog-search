@@ -80,6 +80,13 @@ def test_index_refresh_after_incremental_update(web):
     assert response.json()["results"][0]["path"] == "blue.png"
 
 
+def test_unchanged_scan_reuses_loaded_search_index(web):
+    _, settings, encoder, app = web
+    initial = app.state.service.refresh()
+    index_catalog(settings, encoder)
+    assert app.state.service.refresh() is initial
+
+
 def test_busy_inference_returns_retryable_error(web):
     client, settings, _, app = web
     data = (settings.catalog / "red.png").read_bytes()
