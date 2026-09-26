@@ -23,6 +23,7 @@ class Settings:
     index_interval: float = 60
     index_batch_size: int = 4
     index_settle_seconds: float = 2
+    index_verify_interval: float = 86400
 
     def __post_init__(self):
         if self.threads < 1:
@@ -33,6 +34,8 @@ class Settings:
             raise ValueError("Размер пакета индексации должен быть положительным")
         if not math.isfinite(self.index_settle_seconds) or self.index_settle_seconds < 0:
             raise ValueError("Задержка стабилизации файлов должна быть неотрицательной")
+        if not math.isfinite(self.index_verify_interval) or self.index_verify_interval < 0:
+            raise ValueError("Интервал полной сверки должен быть неотрицательным")
 
     @property
     def database(self) -> Path:

@@ -35,6 +35,9 @@ class IndexReport:
     removed: int = 0
     total: int = 0
     deferred: int = 0
+    fast_skipped: int = 0
+    hashed: int = 0
+    full_verification: bool = False
     errors: list[dict] = field(default_factory=list)
     elapsed_seconds: float = 0
 
@@ -72,6 +75,7 @@ def index_catalog(
     rebuild: bool = False,
     stop_event: threading.Event | None = None,
     settle_seconds: float = 0,
+    verify: bool = False,
 ) -> IndexReport:
     if batch_size < 1:
         raise CatalogError("Размер пакета должен быть положительным")
@@ -80,10 +84,16 @@ def index_catalog(
         raise CatalogError(f"Папка каталога не найдена: {root}")
     settings.storage.mkdir(parents=True, exist_ok=True)
     with FileLock(str(settings.storage / "index.lock"), timeout=0):
-        return _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seconds)
+        return _index(
+            settings, root, encoder, batch_size, rebuild, stop_event, settle_seconds, verify
+        )
 
 
-def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seconds):
+def fingerprint(stat):
+    return json.dumps([stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev])
+
+
+def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seconds, verify):
     started = time.perf_counter()
     report = IndexReport()
     connection = connect(settings.database)
@@ -96,6 +106,13 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
         check_cancelled()
         connection.execute("BEGIN IMMEDIATE")
         previous = metadata(connection)
+        scan_started = time.time()
+        report.full_verification = (
+            verify
+            or rebuild
+            or not previous.get("last_full_scan")
+            or scan_started - float(previous["last_full_scan"]) >= settings.index_verify_interval
+        )
         if previous and not rebuild:
             if previous.get("signature") != encoder.signature:
                 raise CatalogError(
@@ -109,8 +126,10 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
             row["path"]: row["content_hash"]
             for row in connection.execute("SELECT path, content_hash FROM images")
         }
+        states = dict(connection.execute("SELECT path, fingerprint FROM file_state"))
         if rebuild:
             connection.execute("DELETE FROM images")
+            connection.execute("DELETE FROM file_state")
         pending = []
         pending_images = []
         retained = set()
@@ -155,20 +174,30 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                     retained.add(relative)
                     report.deferred += 1
                     continue
+                stamp = fingerprint(before)
+                if (
+                    not report.full_verification
+                    and relative in old
+                    and states.get(relative) == stamp
+                ):
+                    retained.add(relative)
+                    report.unchanged += 1
+                    report.fast_skipped += 1
+                    continue
                 with path.open("rb") as stream:
                     data = stream.read(MAX_IMAGE_BYTES + 1)
                 after = path.stat()
-                if (before.st_size, before.st_mtime_ns, before.st_ino) != (
-                    after.st_size,
-                    after.st_mtime_ns,
-                    after.st_ino,
-                ):
+                if stamp != fingerprint(after):
                     retained.add(relative)
                     report.deferred += 1
                     continue
                 if len(data) > MAX_IMAGE_BYTES:
                     raise ImageError("Файл больше 20 МБ")
                 digest = hashlib.sha256(data).hexdigest()
+                report.hashed += 1
+                connection.execute(
+                    "INSERT OR REPLACE INTO file_state VALUES (?, ?)", (relative, stamp)
+                )
                 if not rebuild and old.get(relative) == digest:
                     retained.add(relative)
                     report.unchanged += 1
@@ -194,6 +223,7 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
         flush()
         removed = set(old) - retained
         connection.executemany("DELETE FROM images WHERE path = ?", [(p,) for p in removed])
+        connection.execute("DELETE FROM file_state WHERE path NOT IN (SELECT path FROM images)")
         report.removed = len(removed)
         report.total = connection.execute("SELECT count(*) FROM images").fetchone()[0]
         changed = rebuild or report.indexed or report.removed or not previous
@@ -207,6 +237,10 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                 "schema_version": str(SCHEMA_VERSION),
             }
             connection.executemany("INSERT OR REPLACE INTO metadata VALUES (?, ?)", info.items())
+        if report.full_verification and not report.deferred and not report.errors:
+            connection.execute(
+                "INSERT OR REPLACE INTO metadata VALUES ('last_full_scan', ?)", (str(scan_started),)
+            )
         check_cancelled()
         connection.commit()
     except BaseException:

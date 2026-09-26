@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -116,3 +117,42 @@ def test_empty_scan_preserves_generation_and_publication_time(catalog):
     Image.new("RGB", (20, 40), "red").save(settings.catalog / "new.png")
     index_catalog(settings, encoder)
     assert catalog_status(settings)["generation"] != initial["generation"]
+
+
+def test_fast_scan_avoids_image_reads_and_full_scan_preserves_generation(catalog, monkeypatch):
+    settings, encoder = catalog
+    index_catalog(settings, encoder)
+    generation = catalog_status(settings)["generation"]
+    original = Path.open
+    reads = []
+
+    def tracked(path, *args, **kwargs):
+        if path.parent == settings.catalog:
+            reads.append(path.name)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked)
+    report = index_catalog(settings, encoder)
+    assert report.fast_skipped == 2
+    assert not reads
+    report = index_catalog(settings, encoder, verify=True)
+    assert report.hashed == 2
+    assert len(reads) == 2
+    assert encoder.encoded == 2
+    assert catalog_status(settings)["generation"] == generation
+
+
+def test_periodic_full_scan_finds_change_even_if_fingerprint_matches(catalog, monkeypatch):
+    import catalog_search.catalog as module
+
+    settings, encoder = catalog
+    monkeypatch.setattr(module, "fingerprint", lambda stat: "same-metadata")
+    index_catalog(settings, encoder)
+    Image.new("RGB", (20, 40), "green").save(settings.catalog / "red.png")
+    assert index_catalog(settings, encoder).fast_skipped == 2
+    with module.connect(settings.database) as db:
+        db.execute("UPDATE metadata SET value='0' WHERE key='last_full_scan'")
+    report = index_catalog(settings, encoder)
+    assert report.full_verification
+    assert report.indexed == 1
+    assert SearchIndex(settings, encoder.signature).search(np.array([0, 1, 0]))[0]["score"] == 1

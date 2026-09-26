@@ -23,6 +23,7 @@ def build_parser():
     index = commands.add_parser("index", help="Создать или обновить индекс")
     index.add_argument("--batch-size", type=int, default=4)
     index.add_argument("--rebuild", action="store_true")
+    index.add_argument("--verify", action="store_true", help="Прочитать и сверить хеши всех файлов")
     backup = commands.add_parser("backup", help="Создать проверенную резервную копию индекса")
     backup.add_argument("destination", type=Path)
     restore = commands.add_parser("restore", help="Восстановить индекс при остановленном сервере")
@@ -43,6 +44,12 @@ def build_parser():
         help="Пауза между фоновыми проверками в секундах; 0 отключает задачу",
     )
     serve.add_argument("--index-batch-size", type=int, default=4)
+    serve.add_argument(
+        "--index-verify-interval",
+        type=float,
+        default=86400,
+        help="Интервал полной сверки хешей; 0 проверяет каждый проход",
+    )
     serve.add_argument(
         "--index-settle-seconds",
         type=float,
@@ -68,6 +75,7 @@ def main():
             index_interval=getattr(args, "index_interval", 60),
             index_batch_size=getattr(args, "index_batch_size", 4),
             index_settle_seconds=getattr(args, "index_settle_seconds", 2),
+            index_verify_interval=getattr(args, "index_verify_interval", 86400),
         )
         run(args, settings)
     except (ValueError, OSError, RuntimeError, Timeout) as exc:
@@ -125,7 +133,9 @@ def run(args, settings):
         print(output)
         return
     if args.command == "index":
-        report = index_catalog(settings, encoder, batch_size=args.batch_size, rebuild=args.rebuild)
+        report = index_catalog(
+            settings, encoder, batch_size=args.batch_size, rebuild=args.rebuild, verify=args.verify
+        )
         print(report_json(report))
         return
     started = time.perf_counter()
