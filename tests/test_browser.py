@@ -26,7 +26,7 @@ def live_app(tmp_path):
     root.mkdir()
     Image.new("RGB", (100, 200), "red").save(root / "red.png")
     Image.new("RGB", (100, 200), "blue").save(root / "blue.png")
-    settings = Settings(catalog=root, storage=tmp_path / "var", threads=1)
+    settings = Settings(catalog=root, storage=tmp_path / "var", threads=1, index_interval=0)
     encoder = ColorEncoder()
     index_catalog(settings, encoder)
     server = uvicorn.Server(

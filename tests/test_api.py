@@ -16,7 +16,7 @@ def web(tmp_path):
     root.mkdir()
     Image.new("RGB", (30, 50), "red").save(root / "red.png")
     Image.new("RGB", (30, 50), "blue").save(root / "blue.png")
-    settings = Settings(catalog=root, storage=tmp_path / "var", threads=1)
+    settings = Settings(catalog=root, storage=tmp_path / "var", threads=1, index_interval=0)
     encoder = ColorEncoder()
     index_catalog(settings, encoder)
     app = create_app(settings, encoder=encoder)
@@ -88,7 +88,7 @@ def test_busy_inference_returns_retryable_error(web):
 
 
 def test_empty_catalog(tmp_path):
-    app = create_app(Settings(storage=tmp_path), encoder=ColorEncoder())
+    app = create_app(Settings(storage=tmp_path, index_interval=0), encoder=ColorEncoder())
     with TestClient(app) as client:
         assert client.get("/api/status").json()["ready"] is False
         assert client.get("/api/catalog").json()["items"] == []

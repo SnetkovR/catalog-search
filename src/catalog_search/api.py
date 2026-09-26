@@ -14,9 +14,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from .catalog import CatalogError, SearchIndex, catalog_status, connect
+from .catalog import CatalogError, SearchIndex, catalog_status, connect, metadata
 from .config import MAX_IMAGE_BYTES, Settings
 from .images import Crop, ImageError, decode_image
+from .jobs import IndexingJob, PriorityEncoder
 
 
 class PayloadTooLarge(HTTPException):
@@ -62,7 +63,9 @@ class SearchService:
     def refresh(self):
         status = catalog_status(self.settings)
         if not status["ready"]:
-            raise CatalogError("Каталог пуст. Выполните catalog-search index")
+            raise CatalogError(
+                "Каталог пуст. Дождитесь индексации или выполните catalog-search index"
+            )
         if self.index is None or self.index.generation != status["generation"]:
             self.index = SearchIndex(self.settings, self.encoder.signature)
         return self.index
@@ -126,8 +129,14 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
             from .encoder import DinoEncoder
 
             instance = await run_in_threadpool(DinoEncoder, settings)
-        app.state.service = SearchService(settings, instance)
-        yield
+        shared = PriorityEncoder(instance)
+        app.state.service = SearchService(settings, shared)
+        app.state.indexing_job = IndexingJob(settings, shared)
+        app.state.indexing_job.start()
+        try:
+            yield
+        finally:
+            await run_in_threadpool(app.state.indexing_job.stop)
 
     app = FastAPI(title="Поиск фотографий", lifespan=lifespan)
     app.add_middleware(BodyLimitMiddleware)
@@ -150,12 +159,13 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
             "compatible": compatible,
             "device": "cpu",
             "threads": settings.threads,
+            "indexing": app.state.indexing_job.snapshot(),
         }
 
     @app.get("/api/catalog")
     def catalog(limit: int = Query(24, ge=1, le=100), offset: int = Query(0, ge=0)):
-        if not settings.database.is_file():
-            return {"items": [], "total": 0}
+        if not catalog_status(settings)["ready"]:
+            return {"items": [], "total": 0, "generation": None}
         connection = connect(settings.database, readonly=True)
         try:
             connection.execute("BEGIN")
@@ -164,6 +174,7 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
             ).fetchall()
             total = connection.execute("SELECT count(*) FROM images").fetchone()[0]
             return {
+                "generation": metadata(connection).get("generation"),
                 "items": [
                     {
                         "id": row["id"],
@@ -179,7 +190,7 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
 
     @app.get("/api/images/{image_id}/thumbnail")
     def thumbnail(image_id: str):
-        if not re.fullmatch(r"[a-f0-9]{64}", image_id) or not settings.database.is_file():
+        if not re.fullmatch(r"[a-f0-9]{64}", image_id) or not catalog_status(settings)["ready"]:
             raise HTTPException(404, "Фотография не найдена")
         connection = connect(settings.database, readonly=True)
         try:

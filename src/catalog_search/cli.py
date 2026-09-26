@@ -32,6 +32,19 @@ def build_parser():
     serve = commands.add_parser("serve", help="Запустить веб-интерфейс")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument(
+        "--index-interval",
+        type=float,
+        default=10,
+        help="Пауза между фоновыми проверками в секундах; 0 отключает задачу",
+    )
+    serve.add_argument("--index-batch-size", type=int, default=4)
+    serve.add_argument(
+        "--index-settle-seconds",
+        type=float,
+        default=2,
+        help="Не индексировать файлы, измененные менее N секунд назад",
+    )
     bench = commands.add_parser("benchmark", help="Замерить CPU и поиск без самосовпадений")
     bench.add_argument("--limit", type=int, default=20)
     bench.add_argument("--repeats", type=int, default=3)
@@ -48,6 +61,9 @@ def main():
             model_cache=args.model_cache,
             threads=args.threads,
             offline=args.offline,
+            index_interval=getattr(args, "index_interval", 10),
+            index_batch_size=getattr(args, "index_batch_size", 4),
+            index_settle_seconds=getattr(args, "index_settle_seconds", 2),
         )
         run(args, settings)
     except (ValueError, OSError, RuntimeError, Timeout) as exc:
