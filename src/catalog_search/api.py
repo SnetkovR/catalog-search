@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from filelock import FileLock
 from starlette.concurrency import run_in_threadpool
 
 from .catalog import CatalogError, SearchIndex, catalog_status, connect, metadata
@@ -124,19 +125,21 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app):
-        instance = encoder
-        if instance is None:
-            from .encoder import DinoEncoder
+        settings.storage.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(settings.storage / "server.lock"), timeout=0):
+            instance = encoder
+            if instance is None:
+                from .encoder import DinoEncoder
 
-            instance = await run_in_threadpool(DinoEncoder, settings)
-        shared = PriorityEncoder(instance)
-        app.state.service = SearchService(settings, shared)
-        app.state.indexing_job = IndexingJob(settings, shared)
-        app.state.indexing_job.start()
-        try:
-            yield
-        finally:
-            await run_in_threadpool(app.state.indexing_job.stop)
+                instance = await run_in_threadpool(DinoEncoder, settings)
+            shared = PriorityEncoder(instance)
+            app.state.service = SearchService(settings, shared)
+            app.state.indexing_job = IndexingJob(settings, shared)
+            app.state.indexing_job.start()
+            try:
+                yield
+            finally:
+                await run_in_threadpool(app.state.indexing_job.stop)
 
     app = FastAPI(title="Поиск фотографий", lifespan=lifespan)
     app.add_middleware(BodyLimitMiddleware)

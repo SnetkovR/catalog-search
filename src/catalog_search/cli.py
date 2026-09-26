@@ -23,6 +23,10 @@ def build_parser():
     index = commands.add_parser("index", help="Создать или обновить индекс")
     index.add_argument("--batch-size", type=int, default=4)
     index.add_argument("--rebuild", action="store_true")
+    backup = commands.add_parser("backup", help="Создать проверенную резервную копию индекса")
+    backup.add_argument("destination", type=Path)
+    restore = commands.add_parser("restore", help="Восстановить индекс при остановленном сервере")
+    restore.add_argument("source", type=Path)
     search = commands.add_parser("search", help="Найти похожие изображения")
     search.add_argument("image", type=Path)
     search.add_argument("--top-k", type=int, default=10)
@@ -67,7 +71,11 @@ def main():
         )
         run(args, settings)
     except (ValueError, OSError, RuntimeError, Timeout) as exc:
-        message = "Индексация уже запущена" if isinstance(exc, Timeout) else str(exc)
+        message = (
+            "Индекс занят: остановите сервер или дождитесь индексации"
+            if isinstance(exc, Timeout)
+            else str(exc)
+        )
         print(f"Ошибка: {message}", file=sys.stderr)
         raise SystemExit(1) from exc
 
@@ -82,6 +90,16 @@ def run(args, settings):
         return
 
     from .catalog import SearchIndex, catalog_status, index_catalog, report_json
+
+    if args.command in {"backup", "restore"}:
+        from .storage import backup_catalog, restore_catalog
+
+        if args.command == "backup":
+            print(backup_catalog(settings, args.destination))
+        else:
+            restore_catalog(settings, args.source)
+            print("Индекс восстановлен")
+        return
 
     if args.command == "status":
         print(json.dumps(catalog_status(settings), ensure_ascii=False, indent=2))

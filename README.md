@@ -173,6 +173,30 @@ uv run catalog-search --offline benchmark --limit 20 --repeats 3 \
 
 ## Устройство проекта
 
+### Схема SQLite и резервные копии
+
+Формат БД версионируется через `PRAGMA user_version`. При первой записи старая схема
+мигрирует автоматически, без пересчета эмбеддингов. Перед миграцией создается копия
+`var/catalog.before-v2-*.sqlite3`. Неизвестная будущая версия отклоняется.
+
+```sh
+# Можно выполнять при работающем сервере: копия включает закоммиченные WAL-страницы.
+uv run catalog-search backup var/backups/catalog.sqlite3
+
+# Сначала остановите сервер, затем восстановите проверенную копию.
+uv run catalog-search restore var/backups/catalog.sqlite3
+```
+
+Копия проверяется на целостность SQLite и корректность эмбеддингов. Существующий файл
+backup не перезаписывается. Восстановление требует той же папки каталога и блокируется,
+пока сервер или индексатор используют хранилище. Прежние файлы БД сохраняются в
+`var/before-restore-*`, включая поврежденную БД. Фотографии и веса нужно копировать отдельно.
+После восстановления очередной проход сверит индекс с актуальными фотографиями.
+
+Для Docker команды выполняются с теми же volumes: `docker compose exec catalog-search
+catalog-search backup /app/var/backups/catalog.sqlite3`; перед `restore` остановите сервис
+и используйте `docker compose run --rm catalog-search restore /app/var/backups/catalog.sqlite3`.
+
 ```text
 src/catalog_search/
   config.py       Пути, лимиты, фиксированная ревизия модели

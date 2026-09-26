@@ -2,12 +2,10 @@
 
 import hashlib
 import json
-import sqlite3
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -16,6 +14,7 @@ from PIL import Image
 
 from .config import MAX_IMAGE_BYTES, Settings
 from .images import SUPPORTED_SUFFIXES, ImageError, decode_image, thumbnail_bytes
+from .storage import SCHEMA_VERSION, CatalogError, connect, metadata
 
 
 class Encoder(Protocol):
@@ -23,10 +22,6 @@ class Encoder(Protocol):
     signature: str
 
     def encode(self, images: list[Image.Image]) -> np.ndarray: ...
-
-
-class CatalogError(ValueError):
-    pass
 
 
 class IndexCancelled(Exception):
@@ -42,23 +37,6 @@ class IndexReport:
     deferred: int = 0
     errors: list[dict] = field(default_factory=list)
     elapsed_seconds: float = 0
-
-
-def connect(database: Path, *, readonly: bool = False) -> sqlite3.Connection:
-    if readonly:
-        if not database.is_file():
-            raise CatalogError("Каталог еще не проиндексирован. Выполните catalog-search index")
-        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
-    else:
-        database.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(database, timeout=30)
-        connection.execute("PRAGMA journal_mode=WAL")
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def metadata(connection: sqlite3.Connection) -> dict:
-    return dict(connection.execute("SELECT key, value FROM metadata").fetchall())
 
 
 def catalog_status(settings: Settings) -> dict:
@@ -116,14 +94,6 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
 
     try:
         check_cancelled()
-        connection.executescript("""
-            CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS images (
-                id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, content_hash TEXT NOT NULL,
-                width INTEGER NOT NULL, height INTEGER NOT NULL,
-                embedding BLOB NOT NULL, thumbnail BLOB NOT NULL
-            );
-        """)
         connection.execute("BEGIN IMMEDIATE")
         previous = metadata(connection)
         if previous and not rebuild:
@@ -234,7 +204,7 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                 "root": str(root),
                 "generation": uuid.uuid4().hex,
                 "updated_at": str(time.time()),
-                "schema_version": "1",
+                "schema_version": str(SCHEMA_VERSION),
             }
             connection.executemany("INSERT OR REPLACE INTO metadata VALUES (?, ?)", info.items())
         check_cancelled()
