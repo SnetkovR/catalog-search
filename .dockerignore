@@ -1,0 +1,10 @@
+# Only application sources and locked dependencies belong in the build context.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!src/
+!src/**
+src/**/__pycache__/
+src/**/*.pyc
