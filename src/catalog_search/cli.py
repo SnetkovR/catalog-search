@@ -32,6 +32,10 @@ def build_parser():
     serve = commands.add_parser("serve", help="Запустить веб-интерфейс")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    bench = commands.add_parser("benchmark", help="Замерить CPU и поиск без самосовпадений")
+    bench.add_argument("--limit", type=int, default=20)
+    bench.add_argument("--repeats", type=int, default=3)
+    bench.add_argument("--output", type=Path)
     return parser
 
 
@@ -72,7 +76,20 @@ def run(args, settings):
     from .images import Crop, decode_image
 
     print("Загрузка DINOv2 Small на CPU…", file=sys.stderr)
+    load_started = time.perf_counter()
     encoder = DinoEncoder(settings)
+    load_seconds = time.perf_counter() - load_started
+    if args.command == "benchmark":
+        from .benchmark import benchmark
+
+        result = benchmark(settings, encoder, limit=args.limit, repeats=args.repeats)
+        result["model_load_seconds"] = round(load_seconds, 3)
+        output = json.dumps(result, ensure_ascii=False, indent=2)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(output + "\n", encoding="utf-8")
+        print(output)
+        return
     if args.command == "index":
         report = index_catalog(settings, encoder, batch_size=args.batch_size, rebuild=args.rebuild)
         print(report_json(report))
