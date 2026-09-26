@@ -1,4 +1,4 @@
-"""Atomic catalog snapshots in SQLite; exact cosine search through CPU FAISS."""
+"""Atomic catalog snapshots in SQLite and exact cosine search through NumPy."""
 
 import hashlib
 import json
@@ -9,7 +9,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-import faiss
 import numpy as np
 from filelock import FileLock
 from PIL import Image
@@ -223,14 +222,13 @@ class SearchIndex:
             ).fetchall()
         finally:
             connection.close()
-        faiss.omp_set_num_threads(settings.threads)
-        self.index = faiss.IndexFlatIP(self.dimension)
+        self.vectors = np.empty((0, self.dimension), dtype=np.float32)
         self.items = []
         if records:
             vectors = np.stack([np.frombuffer(row["embedding"], dtype="<f4") for row in records])
             if vectors.shape != (len(records), self.dimension) or not np.isfinite(vectors).all():
                 raise CatalogError("Поврежден индекс. Выполните index --rebuild")
-            self.index.add(np.ascontiguousarray(vectors, dtype=np.float32))
+            self.vectors = np.ascontiguousarray(vectors, dtype=np.float32)
             self.items = [
                 {key: row[key] for key in row.keys() if key != "embedding"} for row in records
             ]
@@ -251,9 +249,12 @@ class SearchIndex:
         # Fetch extra candidates when all byte-identical copies should be excluded.
         duplicates = sum(item["content_hash"] == exclude_hash for item in self.items)
         count = min(len(self.items), top_k + duplicates)
-        scores, positions = self.index.search(np.ascontiguousarray(vector / norm), count)
+        scores = self.vectors @ (vector[0] / norm)
+        positions = np.argpartition(-scores, count - 1)[:count]
+        positions = positions[np.lexsort((positions, -scores[positions]))]
         results = []
-        for score, position in zip(scores[0], positions[0], strict=True):
+        for position in positions:
+            score = scores[position]
             item = self.items[int(position)]
             if item["content_hash"] == exclude_hash:
                 continue

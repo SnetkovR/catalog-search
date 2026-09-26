@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MODEL_ID = "facebook/dinov2-small"
-MODEL_REVISION = "main"
+MODEL_REVISION = "ed25f3a31f01632728cabb09d1542f84ab7b0056"
 PREPROCESS_VERSION = "rgb-exif-letterbox224-imagenet-cls-l2-v1"
 DIMENSION = 384
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
