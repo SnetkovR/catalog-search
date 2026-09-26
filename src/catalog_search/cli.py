@@ -35,7 +35,7 @@ def build_parser():
     serve.add_argument(
         "--index-interval",
         type=float,
-        default=10,
+        default=60,
         help="Пауза между фоновыми проверками в секундах; 0 отключает задачу",
     )
     serve.add_argument("--index-batch-size", type=int, default=4)
@@ -61,7 +61,7 @@ def main():
             model_cache=args.model_cache,
             threads=args.threads,
             offline=args.offline,
-            index_interval=getattr(args, "index_interval", 10),
+            index_interval=getattr(args, "index_interval", 60),
             index_batch_size=getattr(args, "index_batch_size", 4),
             index_settle_seconds=getattr(args, "index_settle_seconds", 2),
         )

@@ -20,7 +20,7 @@ class Settings:
     model_cache: Path = Path(".cache/huggingface")
     threads: int = min(4, os.cpu_count() or 1)
     offline: bool = False
-    index_interval: float = 10
+    index_interval: float = 60
     index_batch_size: int = 4
     index_settle_seconds: float = 2
 
