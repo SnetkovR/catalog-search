@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Каталог — поиск по фотографии</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="/" aria-label="Каталог, главная">
+      <span class="brand-icon" aria-hidden="true">⌕</span> каталог<span class="brand-dot">.</span>
+    </a>
+    <span class="local-badge"><span></span> Локальный поиск</span>
+  </header>
+  <main>
+    <div class="intro">
+      <div><p class="eyebrow">ПОИСК ПО ИЗОБРАЖЕНИЮ</p><h1>Найдите похожее.</h1>
+        <p class="subtitle">Загрузите фотографию — найдём ближайшие изображения в вашем каталоге.</p></div>
+      <div class="catalog-count"><strong id="count">—</strong><span>фотографий в каталоге</span></div>
+    </div>
+    <div class="workspace">
+      <aside class="query-panel">
+        <div class="panel-heading"><span class="step">01</span><h2>Ваша фотография</h2></div>
+        <label id="dropzone" class="dropzone" for="file">
+          <svg width="38" height="38" viewBox="0 0 38 38" fill="none" aria-hidden="true"><rect x="4" y="7" width="30" height="25" rx="5" stroke="currentColor" stroke-width="1.6"/><path d="m5 26 8-8 8 8 5-5 7 7M25 4v9M21 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="13" cy="13" r="2" fill="currentColor"/></svg>
+          <strong>Выберите фотографию</strong><span>или перетащите её сюда</span>
+          <small>JPG, PNG, WebP · до 20 МБ</small>
+        </label>
+        <input id="file" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp">
+        <div id="preview" hidden>
+          <div class="preview-frame"><canvas id="canvas" aria-label="Предпросмотр фотографии и области поиска"></canvas></div>
+          <p id="filename" class="filename"></p>
+          <div class="preview-actions"><button id="change" class="text-button" type="button">Заменить фото</button><button id="clear-crop" class="text-button" type="button" hidden>Весь кадр</button></div>
+          <p id="crop-help" class="hint">Выделите предмет на фотографии, чтобы искать по выбранной области.</p>
+          <details id="crop-details"><summary>Задать область координатами</summary>
+            <div class="crop-fields">
+              <label>Слева, %<input id="crop-left" type="number" min="0" max="100" value="0"></label>
+              <label>Сверху, %<input id="crop-top" type="number" min="0" max="100" value="0"></label>
+              <label>Справа, %<input id="crop-right" type="number" min="0" max="100" value="100"></label>
+              <label>Снизу, %<input id="crop-bottom" type="number" min="0" max="100" value="100"></label>
+            </div><button id="apply-crop" class="text-button" type="button">Применить область</button>
+          </details>
+        </div>
+        <div class="search-options">
+          <label for="top-k">Количество результатов</label>
+          <select id="top-k"><option value="3">3</option><option value="6" selected>6</option><option value="10">10</option><option value="20">20</option></select>
+        </div>
+        <label class="checkbox"><input id="exclude" type="checkbox" checked> Исключить точные копии файла</label>
+        <button id="search" class="primary-button" type="button" disabled><span>Найти похожие</span><span aria-hidden="true">↗</span></button>
+        <p class="privacy">Фотография обрабатывается локально и не добавляется в каталог.</p>
+      </aside>
+      <section class="results-panel" aria-labelledby="results-title">
+        <div class="results-heading">
+          <div><p class="eyebrow" id="results-label">ВАША КОЛЛЕКЦИЯ</p><h2 id="results-title">Фотографии каталога</h2></div>
+          <button id="show-catalog" class="secondary-button" type="button" hidden>Весь каталог</button>
+        </div>
+        <p id="message" class="message" role="status" aria-live="polite">Загружаем каталог…</p>
+        <div id="grid" class="grid"></div>
+        <button id="load-more" class="secondary-button load-more" type="button" hidden>Показать ещё</button>
+        <div id="empty" class="empty" hidden><span aria-hidden="true">⌕</span><h3>Пока ничего нет</h3><p id="empty-text"></p></div>
+      </section>
+    </div>
+    <footer><span>Ваши фотографии. Ваш каталог.</span><span>Поиск по визуальному сходству</span></footer>
+  </main>
+</body>
+</html>
