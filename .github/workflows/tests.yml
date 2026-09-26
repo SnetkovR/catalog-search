@@ -1,0 +1,101 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  HF_HUB_OFFLINE: "1"
+  PYTHONUNBUFFERED: "1"
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.19"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Check Python lint and formatting
+        if: matrix.python-version == '3.12'
+        run: |
+          uv run --no-sync ruff check src tests
+          uv run --no-sync ruff format --check src tests
+
+      - name: Run unit and API tests
+        run: uv run --no-sync pytest -q --ignore=tests/test_browser.py --junitxml=var/ci/pytest.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-${{ matrix.python-version }}-results
+          path: var/ci/pytest.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  browser:
+    name: Browser tests (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUN_BROWSER_TESTS: "1"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.19"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Install Chromium and OS dependencies
+        run: uv run --no-sync playwright install --with-deps --only-shell chromium
+
+      - name: Run desktop, mobile and background refresh tests
+        run: uv run --no-sync pytest tests/test_browser.py -q --junitxml=var/ci/browser.xml
+
+      - name: Upload browser test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: browser-results
+          path: var/ci/browser.xml
+          if-no-files-found: ignore
+          retention-days: 7
