@@ -5,6 +5,7 @@ const context = canvas.getContext("2d");
 let selectedFile = null, selectedCatalog = null, picture = null, crop = null;
 let pointerStart = null, busy = false, ready = false, imageVersion = 0;
 let catalogItems = [], catalogTotal = 0, objectURL = null;
+let catalogGeneration, showingResults = false, refreshingStatus = false;
 
 function message(text, error = false) {
   $("message").textContent = text;
@@ -50,22 +51,58 @@ function card(item, rank) {
 function render(items, results = false) {
   $("grid").replaceChildren(...items.map((item, i) => card(item, results ? i + 1 : null)));
   $("empty").hidden = items.length > 0;
-  $("empty-text").textContent = results ? "Других фотографий не найдено. Попробуйте отключить исключение точных копий." : "Добавьте фотографии в папку каталога и запустите индексацию.";
+  $("empty-text").textContent = results ? "Других фотографий не найдено. Попробуйте отключить исключение точных копий." : "Добавьте фотографии в папку каталога. При включённом автообновлении они появятся здесь после обработки.";
 }
 function showCatalog() {
+  showingResults = false;
   $("results-label").textContent = "ВАША КОЛЛЕКЦИЯ";
   $("results-title").textContent = "Фотографии каталога";
   $("show-catalog").hidden = true;
   $("load-more").hidden = catalogItems.length >= catalogTotal;
   render(catalogItems);
-  message(ready ? "Выберите фотографию в каталоге или загрузите свою." : "Каталог не готов к поиску. Выполните индексацию.");
+  message(ready ? "Выберите фотографию в каталоге или загрузите свою." : "Каталог пока не готов к поиску. Состояние обновления показано выше.");
 }
-async function loadCatalog(append = false) {
+async function loadCatalog(append = false, display = true) {
   const offset = append ? catalogItems.length : 0;
   const data = await api(`/api/catalog?limit=24&offset=${offset}`);
   catalogItems = append ? [...catalogItems, ...data.items] : data.items;
+  catalogGeneration = data.generation;
   catalogTotal = data.total; $("count").textContent = data.total;
-  showCatalog();
+  if (display && !showingResults) showCatalog();
+}
+function indexingStatus(job) {
+  const element = $("indexing-status");
+  let text;
+  if (!job || !job.enabled) text = "Автообновление выключено. Каталог обновляется вручную.";
+  else if (job.state === "running") text = "Проверяем каталог и обрабатываем новые фотографии…";
+  else if (job.state === "error") text = `Не удалось обновить каталог: ${job.error}. Повторим попытку автоматически.`;
+  else if (job.state === "waiting") text = job.error ? "Каталог обновляется другим процессом. Проверим снова автоматически." : "Ожидаем проверки каталога…";
+  else if (job.report?.errors.length) text = `Не удалось обработать файлов: ${job.report.errors.length}. Остальные фотографии доступны.`;
+  else if (job.report?.deferred) text = `Ожидаем завершения записи файлов: ${job.report.deferred}.`;
+  else text = `Каталог обновляется автоматически. Интервал проверки: ${job.interval_seconds} с.`;
+  element.textContent = text;
+  element.classList.toggle("error", job?.state === "error" || Boolean(job?.report?.errors.length));
+  element.title = (job?.report?.errors || []).slice(0, 5).map(item => `${item.path}: ${item.error}`).join("\n");
+}
+async function refreshStatus() {
+  if (refreshingStatus) return;
+  refreshingStatus = true;
+  try {
+    const status = await api("/api/status");
+    ready = status.ready;
+    indexingStatus(status.indexing);
+    $("count").textContent = status.count;
+    if (!busy && status.generation !== catalogGeneration) {
+      // Refresh the collection without replacing an in-progress query or its results.
+      const data = await api("/api/catalog?limit=24");
+      catalogItems = data.items; catalogTotal = data.total; catalogGeneration = data.generation;
+      if (!busy && !showingResults) showCatalog();
+    }
+    setBusy(busy);
+  } catch {
+    $("indexing-status").textContent = "Нет связи с сервером. Повторим проверку автоматически.";
+    $("indexing-status").classList.add("error");
+  } finally { refreshingStatus = false; }
 }
 function draw() {
   if (!picture) return;
@@ -116,6 +153,7 @@ async function selectFile(file) {
   } catch { URL.revokeObjectURL(url); message("Не удалось открыть фотографию.", true); }
 }
 function showResults(data) {
+  showingResults = true;
   $("results-label").textContent = "РЕЗУЛЬТАТЫ ПОИСКА";
   $("results-title").textContent = "Похожие фотографии";
   $("show-catalog").hidden = false; $("load-more").hidden = true;
@@ -188,7 +226,5 @@ const panel = document.querySelector(".query-panel");
 panel.addEventListener("dragover", event => { event.preventDefault(); $("dropzone").classList.add("dragging"); });
 panel.addEventListener("dragleave", () => $("dropzone").classList.remove("dragging"));
 panel.addEventListener("drop", event => { event.preventDefault(); $("dropzone").classList.remove("dragging"); selectFile(event.dataTransfer.files[0]); });
-(async function init() {
-  try { const status = await api("/api/status"); ready = status.ready; await loadCatalog(); setBusy(false); }
-  catch { ready = false; message("Не удалось подключиться к каталогу. Проверьте, что сервер запущен.", true); }
-})();
+refreshStatus();
+setInterval(refreshStatus, 3000);

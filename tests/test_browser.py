@@ -21,12 +21,19 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def live_app(tmp_path):
+def live_app(tmp_path, request):
     root = tmp_path / "catalog"
     root.mkdir()
     Image.new("RGB", (100, 200), "red").save(root / "red.png")
     Image.new("RGB", (100, 200), "blue").save(root / "blue.png")
-    settings = Settings(catalog=root, storage=tmp_path / "var", threads=1, index_interval=0)
+    background = getattr(request, "param", False)
+    settings = Settings(
+        catalog=root,
+        storage=tmp_path / "var",
+        threads=1,
+        index_interval=0.05 if background else 0,
+        index_settle_seconds=0,
+    )
     encoder = ColorEncoder()
     index_catalog(settings, encoder)
     server = uvicorn.Server(
@@ -91,5 +98,37 @@ def test_upload_crop_neighbors_and_responsive_layout(live_app, viewport):
         page.locator("#search").click()
         expect(page.locator(".card-name").first).to_have_text("red.png")
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        assert not errors
+        browser.close()
+
+
+@pytest.mark.parametrize("live_app", [True], indirect=True)
+def test_background_updates_catalog_without_replacing_search_results(live_app):
+    url, root, _ = live_app
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1365, "height": 1000})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(url)
+        expect(page.locator(".card")).to_have_count(2)
+        expect(page.locator("#indexing-status")).to_contain_text("каталог", ignore_case=True)
+        Image.new("RGB", (100, 200), "green").save(root / "new.png")
+        expect(page.locator("#count")).to_have_text("3", timeout=10_000)
+        expect(page.locator(".card")).to_have_count(3)
+
+        page.locator("#file").set_input_files(str(root / "red.png"))
+        page.locator("#exclude").uncheck()
+        page.locator("#search").click()
+        expect(page.locator(".card-name").first).to_have_text("red.png")
+        Image.new("RGB", (100, 200), "yellow").save(root / "another.png")
+        expect(page.locator("#count")).to_have_text("4", timeout=10_000)
+        expect(page.locator("#results-title")).to_have_text("Похожие фотографии")
+        expect(page.locator(".card")).to_have_count(1)
+        expect(page.locator(".card-name").first).to_have_text("red.png")
+        page.locator("#show-catalog").click()
+        expect(page.locator(".card")).to_have_count(4)
+        (root / "another.png").unlink()
+        expect(page.locator(".card")).to_have_count(3, timeout=10_000)
         assert not errors
         browser.close()
