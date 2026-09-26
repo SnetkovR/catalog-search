@@ -3,6 +3,8 @@
 Локальный поиск похожих изображений: **DINOv2 Small → NumPy → FastAPI**.
 Инференс выполняется только на CPU. Платные API не используются.
 
+[![Tests](https://github.com/SnetkovR/catalog-search/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/SnetkovR/catalog-search/actions/workflows/tests.yml)
+
 ## Запуск
 
 Требуется Python 3.12 и [uv](https://docs.astral.sh/uv/). На Linux устанавливается
@@ -210,6 +212,27 @@ RUN_BROWSER_TESTS=1 PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright \
 Браузерные тесты по умолчанию пропускаются. Реальная модель проверяется командой
 `benchmark` и загрузкой фотографии через интерфейс. Первые замеры и наблюдения:
 [docs/initial-evaluation.md](docs/initial-evaluation.md).
+
+## GitHub Actions
+
+Workflow [Tests](.github/workflows/tests.yml) запускается при каждом push, при
+открытии и обновлении pull request, а также вручную через **Actions → Tests → Run workflow**.
+
+Проверки выполняются на Ubuntu 24.04 в трех параллельных задачах:
+
+- **Python 3.12**: Ruff, проверка форматирования и все тесты, кроме браузерных.
+- **Python 3.13**: тесты обработки изображений, каталога, API и фоновой индексации.
+- **Browser tests (Chromium)**: загрузка, выделение области, мобильная верстка
+  и обновление каталога в фоне. Chromium устанавливается вместе с системными зависимостями.
+
+Зависимости устанавливаются строго из `uv.lock`, кеш uv переиспользуется между
+запусками. Тесты используют временные синтетические данные и тестовый энкодер;
+`HF_HUB_OFFLINE=1` исключает скачивание модели. Секреты и фотографии пользователя
+для запуска не нужны.
+
+JUnit XML-отчеты сохраняются в артефактах запуска на 7 дней, в том числе при
+падении тестов. Более новый запуск для той же ветки или PR отменяет предыдущий.
+Посмотреть результаты: [GitHub Actions](https://github.com/SnetkovR/catalog-search/actions/workflows/tests.yml).
 
 ## Границы первой версии
 
