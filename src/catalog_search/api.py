@@ -164,8 +164,9 @@ def create_app(settings: Settings | None = None, *, encoder=None) -> FastAPI:
 
     @app.get("/api/catalog")
     def catalog(limit: int = Query(24, ge=1, le=100), offset: int = Query(0, ge=0)):
-        if not catalog_status(settings)["ready"]:
-            return {"items": [], "total": 0, "generation": None}
+        state = catalog_status(settings)
+        if not state["ready"]:
+            return {"items": [], "total": 0, "generation": state["generation"]}
         connection = connect(settings.database, readonly=True)
         try:
             connection.execute("BEGIN")
