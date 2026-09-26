@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -28,12 +29,17 @@ class CatalogError(ValueError):
     pass
 
 
+class IndexCancelled(Exception):
+    """Cooperative cancellation; the current transaction must be rolled back."""
+
+
 @dataclass
 class IndexReport:
     indexed: int = 0
     unchanged: int = 0
     removed: int = 0
     total: int = 0
+    deferred: int = 0
     errors: list[dict] = field(default_factory=list)
     elapsed_seconds: float = 0
 
@@ -61,6 +67,12 @@ def catalog_status(settings: Settings) -> dict:
     connection = connect(settings.database, readonly=True)
     try:
         connection.execute("BEGIN")
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if not {"metadata", "images"} <= tables:
+            return {"ready": False, "count": 0, "generation": None}
         info = metadata(connection)
         count = connection.execute("SELECT count(*) FROM images").fetchone()[0]
         return {
@@ -75,7 +87,13 @@ def catalog_status(settings: Settings) -> dict:
 
 
 def index_catalog(
-    settings: Settings, encoder: Encoder, *, batch_size: int = 4, rebuild: bool = False
+    settings: Settings,
+    encoder: Encoder,
+    *,
+    batch_size: int = 4,
+    rebuild: bool = False,
+    stop_event: threading.Event | None = None,
+    settle_seconds: float = 0,
 ) -> IndexReport:
     if batch_size < 1:
         raise CatalogError("Размер пакета должен быть положительным")
@@ -84,14 +102,20 @@ def index_catalog(
         raise CatalogError(f"Папка каталога не найдена: {root}")
     settings.storage.mkdir(parents=True, exist_ok=True)
     with FileLock(str(settings.storage / "index.lock"), timeout=0):
-        return _index(settings, root, encoder, batch_size, rebuild)
+        return _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seconds)
 
 
-def _index(settings, root, encoder, batch_size, rebuild):
+def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seconds):
     started = time.perf_counter()
     report = IndexReport()
     connection = connect(settings.database)
+
+    def check_cancelled():
+        if stop_event is not None and stop_event.is_set():
+            raise IndexCancelled
+
     try:
+        check_cancelled()
         connection.executescript("""
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS images (
@@ -122,6 +146,7 @@ def _index(settings, root, encoder, batch_size, rebuild):
         retained = set()
 
         def flush():
+            check_cancelled()
             if not pending:
                 return
             vectors = np.asarray(encoder.encode(pending_images), dtype=np.float32)
@@ -147,6 +172,7 @@ def _index(settings, root, encoder, batch_size, rebuild):
             pending_images.clear()
 
         for path in sorted(root.rglob("*")):
+            check_cancelled()
             if path.suffix.lower() not in SUPPORTED_SUFFIXES or not path.is_file():
                 continue
             # Do not follow links to files or directories outside the configured catalog.
@@ -154,8 +180,22 @@ def _index(settings, root, encoder, batch_size, rebuild):
                 continue
             relative = path.relative_to(root).as_posix()
             try:
+                before = path.stat()
+                if settle_seconds and time.time() - before.st_mtime < settle_seconds:
+                    retained.add(relative)
+                    report.deferred += 1
+                    continue
                 with path.open("rb") as stream:
                     data = stream.read(MAX_IMAGE_BYTES + 1)
+                after = path.stat()
+                if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ino,
+                ):
+                    retained.add(relative)
+                    report.deferred += 1
+                    continue
                 if len(data) > MAX_IMAGE_BYTES:
                     raise ImageError("Файл больше 20 МБ")
                 digest = hashlib.sha256(data).hexdigest()
@@ -197,6 +237,7 @@ def _index(settings, root, encoder, batch_size, rebuild):
                 "schema_version": "1",
             }
             connection.executemany("INSERT OR REPLACE INTO metadata VALUES (?, ?)", info.items())
+        check_cancelled()
         connection.commit()
     except BaseException:
         connection.rollback()
