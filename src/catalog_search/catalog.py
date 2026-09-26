@@ -31,6 +31,7 @@ class IndexCancelled(Exception):
 @dataclass
 class IndexReport:
     indexed: int = 0
+    resumed: int = 0
     unchanged: int = 0
     removed: int = 0
     total: int = 0
@@ -104,7 +105,6 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
 
     try:
         check_cancelled()
-        connection.execute("BEGIN IMMEDIATE")
         previous = metadata(connection)
         scan_started = time.time()
         report.full_verification = (
@@ -127,12 +127,24 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
             for row in connection.execute("SELECT path, content_hash FROM images")
         }
         states = dict(connection.execute("SELECT path, fingerprint FROM file_state"))
-        if rebuild:
-            connection.execute("DELETE FROM images")
-            connection.execute("DELETE FROM file_state")
+        context = {
+            "signature": encoder.signature,
+            "dimension": str(encoder.dimension),
+            "root": str(root),
+            "rebuild": str(rebuild),
+            "base_generation": previous.get("generation", ""),
+        }
+        if dict(connection.execute("SELECT key, value FROM staging_context")) != context:
+            connection.execute("DELETE FROM staged_images")
+            connection.execute("DELETE FROM staging_context")
+            connection.executemany("INSERT INTO staging_context VALUES (?, ?)", context.items())
+            connection.commit()
+        staged = dict(connection.execute("SELECT path, content_hash FROM staged_images"))
         pending = []
         pending_images = []
         retained = set()
+        selected = set()
+        observed = {}
 
         def flush():
             check_cancelled()
@@ -148,15 +160,13 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
             for item, vector in zip(pending, vectors, strict=True):
                 connection.execute(
                     """
-                    INSERT INTO images VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET path=excluded.path,
-                        content_hash=excluded.content_hash, width=excluded.width,
-                        height=excluded.height, embedding=excluded.embedding,
-                        thumbnail=excluded.thumbnail
+                    INSERT OR REPLACE INTO staged_images VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (*item[:5], vector.astype("<f4").tobytes(), item[5]),
+                    (*item[:5], vector.astype("<f4").tobytes(), item[5], item[6]),
                 )
                 report.indexed += 1
+            # Completed batches survive cancellation or failure of the next batch.
+            connection.commit()
             pending.clear()
             pending_images.clear()
 
@@ -183,6 +193,7 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                     retained.add(relative)
                     report.unchanged += 1
                     report.fast_skipped += 1
+                    observed[relative] = stamp
                     continue
                 with path.open("rb") as stream:
                     data = stream.read(MAX_IMAGE_BYTES + 1)
@@ -195,12 +206,15 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                     raise ImageError("Файл больше 20 МБ")
                 digest = hashlib.sha256(data).hexdigest()
                 report.hashed += 1
-                connection.execute(
-                    "INSERT OR REPLACE INTO file_state VALUES (?, ?)", (relative, stamp)
-                )
+                observed[relative] = stamp
                 if not rebuild and old.get(relative) == digest:
                     retained.add(relative)
                     report.unchanged += 1
+                    continue
+                if staged.get(relative) == digest:
+                    selected.add(relative)
+                    retained.add(relative)
+                    report.resumed += 1
                     continue
                 image = decode_image(data)
                 identifier = hashlib.sha256(relative.encode("utf-8")).hexdigest()
@@ -212,21 +226,56 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                         image.width,
                         image.height,
                         thumbnail_bytes(image),
+                        stamp,
                     )
                 )
                 pending_images.append(image)
                 retained.add(relative)
+                selected.add(relative)
             except (OSError, ImageError) as exc:
                 report.errors.append({"path": relative, "error": str(exc)})
             if len(pending) >= batch_size:
                 flush()
         flush()
+        # A file can change during inference, long after its initial read.
+        for relative, stamp in list(observed.items()):
+            check_cancelled()
+            path = root / relative
+            try:
+                stable = (
+                    not path.is_symlink()
+                    and path.resolve().is_relative_to(root)
+                    and fingerprint(path.stat()) == stamp
+                )
+            except OSError:
+                stable = False
+            if not stable:
+                selected.discard(relative)
+                observed.pop(relative)
+                retained.add(relative)
+                report.deferred += 1
+        if rebuild and report.deferred:
+            raise CatalogError(
+                "Файлы меняются во время rebuild; повторите проход. Пакеты сохранены"
+            )
+        check_cancelled()
+        connection.execute("BEGIN IMMEDIATE")
+        if rebuild:
+            connection.execute("DELETE FROM images")
+            connection.execute("DELETE FROM file_state")
+        connection.executemany(
+            """INSERT OR REPLACE INTO images
+            SELECT id, path, content_hash, width, height, embedding, thumbnail
+            FROM staged_images WHERE path=?""",
+            [(p,) for p in selected],
+        )
+        connection.executemany("INSERT OR REPLACE INTO file_state VALUES (?, ?)", observed.items())
         removed = set(old) - retained
         connection.executemany("DELETE FROM images WHERE path = ?", [(p,) for p in removed])
         connection.execute("DELETE FROM file_state WHERE path NOT IN (SELECT path FROM images)")
         report.removed = len(removed)
         report.total = connection.execute("SELECT count(*) FROM images").fetchone()[0]
-        changed = rebuild or report.indexed or report.removed or not previous
+        changed = rebuild or selected or report.removed or not previous
         if changed:
             info = {
                 "signature": encoder.signature,
@@ -242,6 +291,8 @@ def _index(settings, root, encoder, batch_size, rebuild, stop_event, settle_seco
                 "INSERT OR REPLACE INTO metadata VALUES ('last_full_scan', ?)", (str(scan_started),)
             )
         check_cancelled()
+        connection.execute("DELETE FROM staged_images")
+        connection.execute("DELETE FROM staging_context")
         connection.commit()
     except BaseException:
         connection.rollback()
